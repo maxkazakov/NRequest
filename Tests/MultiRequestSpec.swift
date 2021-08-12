@@ -4,7 +4,6 @@ import UIKit
 import Quick
 import Nimble
 import NSpry
-import NCallback
 import NQueue
 
 @testable import NRequest
@@ -12,9 +11,10 @@ import NQueue
 
 final class MultiRequestSpec: QuickSpec {
     fileprivate enum Constant {
-        static let numberOfRequests = 200
+        static let numberOfRequests = 6
         static let error: RequestError = .decoding(.nilResponse)
-        static let error2: RequestError = .decoding(.brokenResponse)
+        static let success: ResponseData = .testMake()
+        static let failure: ResponseData = .testMake(error: error)
     }
 
     private typealias Response = Subject.Response
@@ -50,7 +50,7 @@ final class MultiRequestSpec: QuickSpec {
                     completionHandlers = [:]
                     tasks = [:]
 
-                    for (offset, request) in subject.requests.enumerated() {
+                    for (offset, _) in subject.requests.enumerated() {
                         tasks[offset] = FakeSessionTask()
                         tasks[offset]?.stub(.resume).andReturn()
 
@@ -61,7 +61,7 @@ final class MultiRequestSpec: QuickSpec {
                             return tasks[offset]
                         }
 
-                        request.start()
+                        subject.start(offset: offset)
                     }
                 }
 
@@ -70,7 +70,7 @@ final class MultiRequestSpec: QuickSpec {
                         tasks[offset]?.resetCallsAndStubs()
                         tasks[offset]?.stub(.isRunning).andReturn(false)
                         tasks[offset]?.stub(.cancel).andReturn()
-                        request.stop()
+                        request.cancel()
                     }
                 }
 
@@ -85,11 +85,6 @@ final class MultiRequestSpec: QuickSpec {
                     let second = 5
 
                     beforeEach {
-                        tasks[first]?.stub(.isRunning).andReturn(false)
-
-                        tasks[second]?.stub(.isRunning).andReturn(true)
-                        tasks[second]?.stub(.cancel).andReturn()
-
                         completionHandlers[first]?(nil, nil, nil)
                         completionHandlers[second]?(nil, nil, nil)
                     }
@@ -97,19 +92,12 @@ final class MultiRequestSpec: QuickSpec {
                     it("should mark completion correctly") {
                         var expectedResponses: [Response] = []
                         for i in 0..<Constant.numberOfRequests {
-                            expectedResponses.append(first == i || second == i ? .normal(.success(.init())) : .pending)
+                            expectedResponses.append(first == i || second == i ? .finished(success: true) : .pending)
                         }
 
                         expect(completionHandlers[first]).toNot(beNil())
                         expect(completionHandlers[second]).toNot(beNil())
                         expect(subject.responses).toEventually(equal(expectedResponses), timeout: .milliseconds(100))
-                    }
-
-                    it("should resume all tasks") {
-                        expect(tasks[first]).to(haveReceived(.isRunning))
-
-                        expect(tasks[second]).to(haveReceived(.isRunning))
-                        expect(tasks[second]).to(haveReceived(.cancel))
                     }
                 }
 
@@ -142,32 +130,8 @@ final class MultiRequestSpec: QuickSpec {
                         }
 
                         it("should not crash on multithreading") {
-                            let expectedResponses: [Response] = Array(repeating: .normal(.success(.init())), count: chunkSize) +
-                            Array(repeating: .normal(.failure(Constant.error)), count: chunkSize)
-                            expect(subject.responses).toEventually(equal(expectedResponses), timeout: .milliseconds(maxDelayInMilliseconds + 100))
-                        }
-                    }
-
-                    context("special completion") {
-                        beforeEach {
-                            for index in 0..<chunkSize {
-                                subject.makeSpecial(at: index)
-                                subject.randomQueue.asyncAfter(deadline: .now() + .milliseconds(Int.random(in: 10...maxDelayInMilliseconds))) {
-                                    completionHandlers[index]?(nil, nil, Constant.error)
-                                }
-                            }
-
-                            for index in chunkSize..<Constant.numberOfRequests {
-                                subject.makeSpecial(at: index)
-                                subject.randomQueue.asyncAfter(deadline: .now() + .milliseconds(Int.random(in: 10...maxDelayInMilliseconds))) {
-                                    completionHandlers[index]?(nil, nil, Constant.error2)
-                                }
-                            }
-                        }
-
-                        it("should not crash on multithreading") {
-                            let expectedResponses: [Response] = Array(repeating: .special(Constant.error), count: chunkSize) +
-                            Array(repeating: .normal(.failure(Constant.error2)), count: chunkSize)
+                            let expectedResponses: [Response] = Array(repeating: .finished(success: true), count: chunkSize) +
+                            Array(repeating: .finished(success: false), count: chunkSize)
                             expect(subject.responses).toEventually(equal(expectedResponses), timeout: .milliseconds(maxDelayInMilliseconds + 100))
                         }
                     }
@@ -182,11 +146,11 @@ final class MultiRequestSpec: QuickSpec {
                                 }
 
                                 queue.asyncAfter(deadline: .now() + .milliseconds(delay)) {
-                                    subject.requests[index].stop()
+                                    subject.requests[index].cancel()
                                 }
 
                                 queue.asyncAfter(deadline: .now() + .milliseconds(delay)) {
-                                    subject.requests[index].start()
+                                    subject.requests[index].restart()
                                 }
 
                                 queue.asyncAfter(deadline: .now() + .milliseconds(delay + 100)) {
@@ -196,8 +160,9 @@ final class MultiRequestSpec: QuickSpec {
                         }
 
                         it("should not crash on multithreading") {
-                            expect(subject.responses.contains(.pending)).toEventually(equal(false),
-                                                                                      timeout: .milliseconds(maxDelayInMilliseconds + 200))
+                            expect(subject.responses.enumerated().filter({ $0.element == .pending }).map({ $0.offset }))
+                                .toEventually(beEmpty(),
+                                              timeout: .milliseconds(maxDelayInMilliseconds + 200))
                         }
                     }
                 }
@@ -207,26 +172,18 @@ final class MultiRequestSpec: QuickSpec {
 }
 
 private final class Subject {
-    typealias MyRequest = Impl.Request<VoidContent<RequestError>, RequestError>
+    private typealias Constant = MultiRequestSpec.Constant
 
     enum Response: Equatable, SpryEquatable, CustomDebugStringConvertible {
         case pending
-        case normal(Result<Void, RequestError>)
-        case special(RequestError?)
+        case finished(success: Bool)
 
         var debugDescription: String {
             switch self {
             case .pending:
                 return "pending"
-            case .normal(let result):
-                switch result {
-                case .success:
-                    return "normal - success"
-                case .failure:
-                    return "normal - failure"
-                }
-            case .special(let error):
-                return "special - \(error?.localizedDescription ?? "nil")"
+            case .finished(let result):
+                return "finished: " + (result ? "success" : "failure")
             }
         }
     }
@@ -242,7 +199,7 @@ private final class Subject {
         return queues.randomElement() ?? Queue.utility
     }
 
-    private(set) var requests: [MyRequest] = []
+    private(set) var requests: [Request] = []
     private(set) var responses: [Response] = []
     private(set) var sdkRequests: [Int: URLRequest] = [:]
 
@@ -257,44 +214,24 @@ private final class Subject {
                                                  queue: delayedQueue,
                                                  session: session)
 
-            let request: MyRequest = try MyRequest(parameters: parameters)
-            sdkRequests[index] = request.info.request.original
-
-            request.onComplete { [weak self] result in
-                guard let self = self else {
-                    return
-                }
-
-                Queue.main.sync {
-                    self.responses.remove(at: index)
-                    self.responses.insert(.normal(result), at: index)
-                }
-            }
+            let request: Request = Impl.Request(parameters: parameters)
+            sdkRequests[index] = try! parameters.sdkRequest()
 
             requests.append(request)
         }
     }
 
-    func makeSpecial(at index: Int) {
-        requests[index].onSpecialComplete { [weak self] _, _, _, error in
+    func start(offset: Int) {
+        requests[offset].start { [weak self] data in
             guard let self = self else {
-                return .ignore
+                return
             }
 
             Queue.main.sync {
-                self.responses.remove(at: index)
-                self.responses.insert(.special(error.map({ .wrap($0) })), at: index)
+                self.responses.remove(at: offset)
+                assert(data == Constant.success || data == Constant.failure)
+                self.responses.insert(.finished(success: data == Constant.success), at: offset)
             }
-
-            guard let error = error as? RequestError else {
-                return .ignore
-            }
-
-            if error == MultiRequestSpec.Constant.error2 {
-                return .passOver
-            }
-
-            return .ignore
         }
     }
 }

@@ -4,6 +4,7 @@ import NQueue
 public typealias HeaderFields = [String: String]
 
 public struct Parameters {
+    public typealias UserInfo = [String: Any]
     public static var sharedSession: Session = URLSession.shared
 
     public enum TaskKind {
@@ -39,7 +40,7 @@ public struct Parameters {
     public var session: Session
 
     /// used only on client side. best practice to use it to identify request in the Plugin's
-    public var userInfo: [String: Any] = [:]
+    public var userInfo: UserInfo
 
     public init(address: Address,
                 header: HeaderFields = [:],
@@ -52,6 +53,7 @@ public struct Parameters {
                 queue: DelayedQueue = .async(Queue.main),
                 isLoggingEnabled: Bool = false,
                 taskKind: TaskKind? = nil,
+                userInfo: UserInfo = .init(),
                 session: Session = Self.sharedSession) {
         self.address = address
         self.header = header
@@ -64,6 +66,7 @@ public struct Parameters {
         self.queue = queue
         self.isLoggingEnabled = isLoggingEnabled
         self.taskKind = taskKind
+        self.userInfo = userInfo
         self.session = session
     }
 }
@@ -83,21 +86,5 @@ extension Parameters {
         var new = lhs
         new.plugins += plugins
         return new
-    }
-}
-
-extension Parameters {
-    func sdkRequest() throws -> URLRequest {
-        var request = URLRequest(url: try address.url(),
-                                 cachePolicy: requestPolicy,
-                                 timeoutInterval: timeoutInterval)
-        request.httpMethod = method.toString()
-
-        for (key, value) in header {
-            request.addValue(value, forHTTPHeaderField: key)
-        }
-
-        try body.fill(&request, isLoggingEnabled: isLoggingEnabled)
-        return request
     }
 }

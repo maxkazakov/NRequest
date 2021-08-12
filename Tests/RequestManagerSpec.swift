@@ -10,13 +10,31 @@ import NSpry
 @testable import NCallback
 @testable import NCallbackTestHelpers
 
-class BaseRequestFactorySpec: QuickSpec {
+class RequestManagerSpec: QuickSpec {
     private typealias Error = RequestError
     private struct TestInfo: Decodable { }
 
     override func spec() {
-        describe("BaseRequestFactory") {
-            var subject: BaseRequestFactory<Error>!
+        describe("RequestManager") {
+            var subject: AnyRequestManager<Error>!
+            var factory: FakeRequestFactory!
+            var stubResponse: ((ResponseData) -> Void)!
+
+            beforeEach {
+                factory = .init()
+                stubResponse = { data in
+                    factory.stub(.make).andDo { args in
+                        let request = FakeRequest()
+                        request.stub(.start).andDo { args in
+                            let callback = args[0] as! Request.CompletionCallback
+                            callback(data)
+                            return Void()
+                        }
+                        request.stub(.cancel).andReturn()
+                        return request
+                    }
+                }
+            }
 
             describe("containing plugin provider") {
                 var pluginProvider: FakePluginProvider!
@@ -28,15 +46,18 @@ class BaseRequestFactorySpec: QuickSpec {
                     pluginProvider = .init()
                     pluginProvider.stub(.plugins).andReturn([plugin])
 
-                    subject = BaseRequestFactory(pluginProvider: pluginProvider)
+                    subject = Impl.RequestManager(factory: factory,
+                                                  pluginProvider: pluginProvider,
+                                                  stopTheLine: nil).toAny()
                 }
 
-                describe("Void response") {
+                describe("void response") {
                     var actualCallback: ResultCallback<Void, Error>!
                     var parameters: Parameters!
 
                     beforeEach {
                         parameters = .testMake()
+                        stubResponse(.testMake())
                         actualCallback = subject.requestVoid(with: parameters)
                     }
 
@@ -55,6 +76,7 @@ class BaseRequestFactorySpec: QuickSpec {
 
                     beforeEach {
                         parameters = .testMake()
+                        stubResponse(.testMake())
                         actualCallback = subject.requestImage(with: parameters)
                     }
 
@@ -73,6 +95,7 @@ class BaseRequestFactorySpec: QuickSpec {
 
                     beforeEach {
                         parameters = .testMake()
+                        stubResponse(.testMake())
                         actualCallback = subject.requestOptionalImage(with: parameters)
                     }
 
@@ -91,6 +114,7 @@ class BaseRequestFactorySpec: QuickSpec {
 
                     beforeEach {
                         parameters = .testMake()
+                        stubResponse(.testMake())
                         actualCallback = subject.request(with: parameters)
                     }
 
@@ -109,6 +133,7 @@ class BaseRequestFactorySpec: QuickSpec {
 
                     beforeEach {
                         parameters = .testMake()
+                        stubResponse(.testMake())
                         actualCallback = subject.request(with: parameters)
                     }
 
@@ -127,6 +152,7 @@ class BaseRequestFactorySpec: QuickSpec {
 
                     beforeEach {
                         parameters = .testMake()
+                        stubResponse(.testMake())
                         actualCallback = subject.requestDecodable(TestInfo.self, with: parameters)
                     }
 
@@ -145,6 +171,7 @@ class BaseRequestFactorySpec: QuickSpec {
 
                     beforeEach {
                         parameters = .testMake()
+                        stubResponse(.testMake())
                         actualCallback = subject.request(with: parameters)
                     }
 
@@ -163,6 +190,7 @@ class BaseRequestFactorySpec: QuickSpec {
 
                     beforeEach {
                         parameters = .testMake()
+                        stubResponse(.testMake())
                         actualCallback = subject.request(with: parameters)
                     }
 
@@ -181,6 +209,7 @@ class BaseRequestFactorySpec: QuickSpec {
 
                     beforeEach {
                         parameters = .testMake()
+                        stubResponse(.testMake())
                         actualCallback = subject.requestAny(with: parameters)
                     }
 
@@ -199,6 +228,7 @@ class BaseRequestFactorySpec: QuickSpec {
 
                     beforeEach {
                         parameters = .testMake()
+                        stubResponse(.testMake())
                         actualCallback = subject.requestOptionalAny(with: parameters)
                     }
 
@@ -217,8 +247,11 @@ class BaseRequestFactorySpec: QuickSpec {
                 var parameters: Parameters!
 
                 beforeEach {
-                    subject = BaseRequestFactory(pluginProvider: nil)
+                    subject = Impl.RequestManager(factory: factory,
+                                                  pluginProvider: nil,
+                                                  stopTheLine: nil).toAny()
                     parameters = .testMake()
+                    stubResponse(.testMake())
                     actualCallback = subject.request(with: parameters)
                 }
 
